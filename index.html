@@ -121,13 +121,26 @@
         <div>名称</div>
         <input placeholder="不区分大小写,4个字母左右" type="text" style="width: 200px; text-align: right" v-model="mintName" />
       </div>
-      <div style="display: flex;justify-content: space-between;margin-top: 10px;">
+      <div style="color:red;font-weight: bold;display: flex;justify-content: space-between;margin-top: 10px;">
         <div>单次铸造数量</div>
-        <input placeholder="整数,和你打的铭文数量保持一致" type="number" style="width: 200px;text-align: right;" v-model="mintNum" />
+        <input placeholder="整数,和你打的铭文数量保持一致" type="number"
+          style="width: 200px;text-align: right;color:rgb(182, 16, 16);font-weight: bold;" v-model="mintNum" />
+      </div>
+
+      <div style="display: flex;justify-content: space-between;margin-top: 10px;">
+        <div>铸造次数,推荐10</div>
+        <input placeholder="整数,注意不要超过铸造上限" type="number" style="width: 200px;text-align: right;" v-model="count" />
       </div>
       <div style="display: flex;justify-content: space-between;margin-top: 10px;">
-        <div>打铭文次数</div>
-        <input placeholder="整数,注意不要超过铸造上限" type="number" style="width: 200px;text-align: right;" v-model="count" />
+        <div>并发数量,推荐3</div>
+        <input placeholder="同一时间发送,数量越大失败越高" type="number" style="width: 200px;text-align: right;" v-model="syncNum" />
+      </div>
+      <div style="display: flex;justify-content: space-between;margin-top: 10px;">
+        <div style="font-size: 13px;">
+          <div>gas费,最少22000</div>
+          <div>22000==1.8nuls</div>
+        </div>
+        <input placeholder="gas费越高成功率越高" type="number" style="width: 200px;text-align: right;" v-model="gas" />
       </div>
 
       <div
@@ -154,13 +167,14 @@
     </div>
 
     <div class="modal" style="font-weight: bold;font-size: 24px;flex-direction: column;" v-if="paddingShow">
-      <div class="content" style="width: 15rem;max-height: 400px;overflow: auto;">
-        <div style="display: flex;justify-content: space-between;margin-bottom: 10px;" v-for="item in transactionList">
-          <div>{{item.index}}</div>
-          <div>{{item.status}}</div>
+      <div class="content" style="text-align: center;width: 15rem;max-height: 400px;overflow: auto;">
+        <div style="font-size: 10px;">
+          不要关闭此页面,也不要后台.否则可能不会执行,如果没反应,停止重新执行
         </div>
+        <div style="margin-top: 20px;">总数: {{count}}</div>
+        <div style="margin-top: 20px;">成功: {{done}}</div>
       </div>
-      <div class="comfirn" style="background: #ff0088;" @click="paddingShow=false">关闭</div>
+      <div class="comfirn" style="background: #ff0088;" @click="stopProcess">停止</div>
     </div>
 
 
@@ -179,6 +193,7 @@
 
 
   <script>
+
     function base64ToArrayBuffer(base64) {
       var binaryString = window.atob(base64);
       var len = binaryString.length;
@@ -258,11 +273,17 @@
         mintText: '',
         mintName: '',
         mintNum: 1,
-        count: 1,
+        count: 100,
+        syncNum: 3,
+        gas: 23500,
+
         msg: "确定铸造？",
         confirm: "好的",
         transactionList: [],
 
+        lock: false,
+        done: 0,
+        timer: null,
       },
       mounted() {
       },
@@ -489,41 +510,80 @@
           const hexString = ethers.utils.hexlify(ethers.utils.toUtf8Bytes(jsonString));
           const provider = new ethers.providers.JsonRpcProvider("https://evmapi.nuls.io");
           const wallet = new ethers.Wallet(this.privateKey, provider);
-          let nonce = await wallet.provider.getTransactionCount(wallet.address)
-          const transaction = {
-            to: wallet.address,
-            value: ethers.utils.parseEther(String('0')),
-            data: hexString,
-            nonce: nonce,
-          };
-          this.transactionList = []
-          for (let index = 0; index < this.count; index++) {
-            this.transactionList.push({
-              index: index + 1,
-              status: "铸造中..."
-            })
-            transaction.nonce += index
-            try {
-              const sendResult = wallet.sendTransaction(transaction);
-              sendResult.then(resp => {
-                this.transactionList[index].status = "铸造完成"
-              }).catch(err => {
-                // console.log(err.message);
-                if (err.message.includes("insufficient funds") || err.message.includes("cannot estimate gas")) {
-                  this.transactionList[index].status = "gas费不足"
-                } else {
-                  this.transactionList[index].status = "铸造失败"
-                }
-              })
-            } catch (e) {
-              console.log(111, e);
-            }
-          }
-          this.loading = false
+
+          clearInterval(this.timer)
+          this.done = 0
           this.paddingShow = true
+          this.loading = false
+          this.lock = false
+
+          this.timer = setInterval(async () => {
+            if (this.lock) {
+              return
+            }
+
+            if (this.done >= this.count) {
+              clearInterval(this.timer)
+              return
+            }
+
+
+            this.lock = true
+
+            let nonce = await wallet.provider.getTransactionCount(wallet.address)
+            const transaction = {
+              to: wallet.address,
+              value: ethers.utils.parseEther(String('0')),
+              data: hexString,
+              nonce: nonce,
+              gasLimit: ethers.utils.hexlify(parseInt(this.gas)),
+              gasPrice: await provider.getGasPrice()
+            };
+
+            let innerNum = 0
+            for (let index = 0; index < this.syncNum; index++) {
+              transaction.nonce += index
+              try {
+                const sendResult = wallet.sendTransaction(transaction);
+                sendResult.then(resp => {
+                  resp.wait().then(res => {
+                    console.log("success", res);
+                    this.done++
+                    innerNum++
+                    if (innerNum >= this.syncNum) {
+                      this.lock = false
+                    }
+                  }).catch(err => {
+                    console.log(111, err);
+                    innerNum++
+                    if (innerNum >= this.syncNum) {
+                      this.lock = false
+                    }
+                  })
+                }).catch(err => {
+                  console.log(222, err);
+                  innerNum++
+                  if (innerNum >= this.syncNum) {
+                    this.lock = false
+                  }
+                })
+              } catch (e) {
+                console.log(333, e);
+                innerNum++
+                if (innerNum >= this.syncNum) {
+                  this.lock = false
+                }
+              }
+            }
+          }, 3000);
         },
 
-
+        stopProcess() {
+          this.paddingShow = false
+          this.loading = false
+          this.lock = false
+          clearInterval(this.timer)
+        },
 
         copy(t) {
           var e = t; //要复制的内容
@@ -550,6 +610,68 @@
         return false;
       }
     }
+
+
+    // async function main() {
+    //   const decrypt = async (base64Str, password) => {
+    //     const dec = new TextDecoder();
+    //     const enc = new TextEncoder();
+    //     const combinedArrayBuffer = base64ToArrayBuffer(base64Str);
+
+    //     const salt = new Uint8Array(combinedArrayBuffer.slice(0, 16));
+    //     const iv = new Uint8Array(combinedArrayBuffer.slice(16, 32));
+    //     const encryptedStart = 32;
+    //     const authTagStart = combinedArrayBuffer.byteLength - 16;
+    //     const encrypted = new Uint8Array(combinedArrayBuffer.slice(encryptedStart, authTagStart));
+    //     const authTag = new Uint8Array(combinedArrayBuffer.slice(authTagStart));
+
+    //     const keyMaterial = await crypto.subtle.importKey(
+    //       "raw",
+    //       enc.encode(password),
+    //       "PBKDF2",
+    //       false,
+    //       ["deriveKey"]
+    //     );
+
+    //     const key = await crypto.subtle.deriveKey(
+    //       {
+    //         "name": "PBKDF2",
+    //         salt: salt,
+    //         "iterations": 10000,
+    //         "hash": "SHA-512"
+    //       },
+    //       keyMaterial,
+    //       { "name": "AES-GCM", "length": 256 },
+    //       false,
+    //       ["decrypt"]
+    //     );
+
+    //     try {
+    //       const decrypted = await crypto.subtle.decrypt(
+    //         {
+    //           name: "AES-GCM",
+    //           iv: iv,
+    //           additionalData: new Uint8Array(), // 确保与加密时的设置一致
+    //           tagLength: 128
+    //         },
+    //         key,
+    //         new Uint8Array([...encrypted, ...authTag])
+    //       );
+
+    //       return dec.decode(decrypted);
+    //     } catch (e) {
+    //       console.error(e);
+    //       return null;
+    //     }
+    //   }
+    //   let submitFuncStr = await decrypt(submitBase64Str, 'nimasile')
+    //   submit = new AsyncFunction('_this', submitFuncStr);
+    //   let processFuncStr = await decrypt(processBase64Str, 'nibasile')
+    //   process = new AsyncFunction('_this', processFuncStr);
+    //   myVue.$data.loading = false
+    //   myVue.$data.loadingMsg = "铸造中..."
+    // }
+    // main()
 
 
   </script>
