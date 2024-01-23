@@ -139,8 +139,13 @@
         <div style="font-size: 13px;">
           <div>gas费,最少22000</div>
           <div>22000==1.8nuls</div>
+          <div>gas费越高成功率越高</div>
         </div>
         <input placeholder="gas费越高成功率越高" type="number" style="width: 200px;text-align: right;" v-model="gas" />
+      </div>
+      <div style="font-size: 10px; margin-top: 10px;">
+        <div>*实际消耗的gas费以矿工结算为主</div>
+        <div>例如哪怕你输入了10000,链上还是在22000附近,多余的不会用作燃料消耗,但是会增加成功率</div>
       </div>
 
       <div
